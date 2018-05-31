@@ -1,0 +1,138 @@
+<?php
+require(“vendor/autoload.php”);
+use \LINE\LINEBot\HTTPClient\CurlHTTPClient;
+use \LINE\LINEBot;
+
+require(“phpMQTT.php”);
+
+$mqtt = new phpMQTT(“www.yourmqttserver.com”, 1883, “phpMQTT Pub Example”); //เปลี่ยน www.yourmqttserver.com ไปที่ mqtt server ที่เราสมัครไว้นะครับ
+
+$token = “your line messaging api token”; //นำ token ที่มาจาก line developer account ของเรามาใส่ครับ
+
+$httpClient = new CurlHTTPClient($token);
+$bot = new LINEBot($httpClient, [‘channelSecret’ => $token]);
+// webhook
+$jsonStr = file_get_contents(‘php://input’);
+$jsonObj = json_decode($jsonStr);
+print_r($jsonStr);
+foreach ($jsonObj->events as $event) {
+if(‘message’ == $event->type){
+// debug
+//file_put_contents(“message.json”, json_encode($event));
+$text = $event->message->text;
+
+if (preg_match(“/สวัสดี/”, $text)) {
+$text = “มีอะไรให้จ่าวิสรับใช้ครับ”;
+}
+
+if (preg_match(“/เปิดทีวี/”, $text)) {     //หากในแชตที่ส่งมามีคำว่า เปิดทีวี ก็ให้ส่ง mqtt ไปแจ้ง server เราครับ
+if ($mqtt->connect()) {
+$mqtt->publish(“/ESP/REMOTE”,”TV”); // ตัวอย่างคำสั่งเปิดทีวีที่จะส่งไปยัง mqtt server
+$mqtt->close();
+}
+$text = “เปิดทีวีให้แล้วคร้าบบบบ”;
+}
+if (preg_match(“/ปิดทีวี/”, $text) and !preg_match(“/เปิดทีวี/”, $text)) {
+if ($mqtt->connect()) {
+$mqtt->publish(“/ESP/REMOTE”,”TV”);
+$mqtt->close();
+}
+$text = “จ่าปิดทีวีให้แล้วนะครับ!!”;
+}
+$response = $bot->replyText($event->replyToken, $text); // ส่งคำ reply กลับไปยัง line application
+
+}
+}
+
+?>
+[/code]
+
+ 
+
+และ อีกส่วนคือ Code ที่เราต้องเขียนและบันทึกเข้าไปยัง Node MCU โดยใช้ Arduino IDE
+NodeMCU
+NodeMCU
+
+IR LED
+IR LED
+
+[code]
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+#include <IRremoteESP8266.h>
+// Update these with values suitable for your network.
+const char* ssid = “Your WiFi SSID”; //ชื่อ WiFi SSID ที่จะให้ nodeMCU ไปเชื่อมต่อ internet
+const char* password = “WiFi password Key”; //WiFi Key
+
+IRsend irsend(4); //an IR led is connected to GPIO pin 4 (D2)  เราจะต่อ IR LED ขา anode(+) เข้ากับ pin4 และ ขา cathode(-) เข้ากับขา GND ของบอร์ด NodeMCU
+// Config MQTT Server
+#define mqtt_server “www.yourmqttserver.com” //อย่าลืมเปลี่ยนเป็น url ของ MQTT Server ที่เราใช้นะครับ
+#define mqtt_port 1883
+#define mqtt_user “TEST” //mqtt user
+#define mqtt_password “12345” //mqtt password
+
+#define LED_PIN 2
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+void setup() {
+irsend.begin();
+pinMode(LED_PIN, OUTPUT);
+
+Serial.begin(115200);
+delay(10);
+
+Serial.println();
+Serial.print(“Connecting to “);
+Serial.println(ssid);
+
+WiFi.begin(ssid, password);
+
+while (WiFi.status() != WL_CONNECTED) {
+delay(500);
+Serial.print(“.”);
+}
+
+Serial.println(“”);
+Serial.println(“WiFi connected”);
+Serial.println(“IP address: “);
+Serial.println(WiFi.localIP());
+
+client.setServer(mqtt_server, mqtt_port);
+client.setCallback(callback);
+}
+
+void loop() {
+if (!client.connected()) {
+Serial.print(“Attempting MQTT connection…”);
+if (client.connect(“ESP8266Client”, mqtt_user, mqtt_password)) {
+Serial.println(“connected”);
+client.subscribe(“/ESP/REMOTE”); //ก่อนอื่นก็ต้องให้ NodeMCU ทำการ subscribe คำสั่ง /ESP/REMOTE กับ MQTT Server ซะก่อน
+} else {
+Serial.print(“failed, rc=”);
+Serial.print(client.state());
+Serial.println(” try again in 5 seconds”);
+delay(5000);
+return;
+}
+}
+client.loop();
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+Serial.print(“Message arrived [“);
+Serial.print(topic);
+Serial.print(“] “);
+String msg = “”;
+int i=0;
+while (i<length) msg += (char)payload[i++];
+
+if (msg == “TV”) {  //ถ้าหากได้รับคำสั่ง TV มาจาก MQTT Server ก็ให้ส่ง IR ไปยัง TV
+irsend.sendNEC(0x20DF10EF, 32);  //ตัวอย่าง TV LG ใช้ NEC IR Protocol เราก็ส่ง IR Code 0x20DF10EF ออกไป
+Serial.println(“TV”);
+
+return;
+}
+Serial.println(msg);
+}
